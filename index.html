@@ -1,0 +1,220 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Pitch Trainer</title><style>
+body{margin:0;font-family:Inter,Arial;background:#0f0f11;color:#e5e5e7;}
+.container{max-width:700px;margin:auto;padding:40px 20px;}
+.card{background:#1a1a1d;padding:30px;border-radius:18px;box-shadow:0 0 25px rgba(0,0,0,.4);margin-bottom:25px;transition:background .4s;}
+h1,h2{font-weight:600;color:#fff;}
+button{padding:14px 22px;font-size:18px;border-radius:10px;border:none;cursor:pointer;margin:8px;transition:transform .15s,opacity .2s;}
+button:hover{transform:translateY(-2px);opacity:.9;}
+.btn-primary{background:#4f46e5;color:#fff;}
+.btn-secondary{background:#3f3f46;color:#fff;}
+.btn-answer{background:#2563eb;color:#fff;}
+.btn-danger{background:#dc2626;color:#fff;}
+.stat{background:#26262a;padding:16px;border-radius:12px;margin:12px 0;font-size:16px;}
+.rangeBar{height:20px;width:100%;background:#fbbf24;border-radius:10px;transition:width .4s;}
+.pulse{box-shadow:0 0 12px #fbbf24;}
+.flash-correct{background:#1e3a1e!important;}
+.flash-incorrect{background:#3a1e1e!important;}
+.hidden{display:none;}
+canvas{background:#111;border-radius:12px;margin-top:20px;}
+</style></head><body><div class="container">
+
+<div id="welcome" class="card"><h1>Pitch Discrimination Trainer</h1><p>Train your ability to hear extremely small pitch differences.</p><p>Use headphones for best results.</p><button class="btn-primary" onclick="startApp()">Begin</button><button class="btn-secondary" onclick="showProgress()">Profile / Progress</button></div>
+
+<div id="calibrationInstructions" class="card hidden"><h2>Calibration</h2><p>You will hear two tones. The second may be slightly higher or lower.</p><p>Your job is to choose whether the second tone is higher or lower.</p><p>The system adjusts difficulty automatically.</p><button class="btn-primary" onclick="startCalibration()">Begin Calibration</button></div>
+
+<div id="calibration" class="card hidden"><h2>Calibration</h2>
+<div class="stat">Reversals: <span id="calCount">0</span> / 8</div>
+<div class="stat">Current Difference: <span id="calCentsDisplay">40</span> cents</div>
+<div class="stat">Pitch Range:<div style="width:100%;background:#111;height:20px;border-radius:10px;"><div id="rangeBarCal" class="rangeBar"></div></div>
+<p style="font-size:14px;color:#cfcfcf;margin-top:8px;">This bar shows how far apart the two tones are. As you improve, the bar shrinks toward your threshold.</p></div>
+<button class="btn-primary" onclick="playTrial()">Play</button><br>
+<button class="btn-answer" onclick="respond('higher')">Higher</button>
+<button class="btn-answer" onclick="respond('lower')">Lower</button>
+<div id="calibrationMessage"></div></div>
+
+<div id="training" class="card hidden"><h2>Training</h2>
+<div class="stat">Round: <span id="roundDisplay">1</span> / <span id="roundTotal">20</span></div>
+<div class="stat"><div style="width:100%;background:#111;height:20px;border-radius:10px;"><div id="progressBar" style="height:20px;width:0%;background:#4f46e5;border-radius:10px;"></div></div></div>
+<div class="stat">Current Difference: <span id="centsDisplay">--</span> cents</div>
+<div class="stat">Pitch Range:<div style="width:100%;background:#111;height:20px;border-radius:10px;"><div id="rangeBarTrain" class="rangeBar"></div></div>
+<p style="font-size:14px;color:#cfcfcf;margin-top:8px;">This bar shrinks as the tones get closer together. When you miss, it expands slightly.</p></div>
+<div class="stat">Score: <span id="scoreDisplay">0 / 0</span></div>
+<div class="stat">Threshold: <span id="thresholdDisplay">--</span></div>
+<div class="stat">Timbre:<select id="timbreSelect"></select></div>
+<label>Volume<br><input type="range" min="0" max="100" value="50" id="volume"></label><br><br>
+<button class="btn-primary" onclick="playTrial()">Play</button>
+<button class="btn-secondary" onclick="replay()">Replay</button><br>
+<button class="btn-answer" onclick="respond('higher')">Higher</button>
+<button class="btn-answer" onclick="respond('lower')">Lower</button>
+<div id="message"></div><br>
+<button class="btn-secondary" onclick="endSession()">End Session</button></div>
+
+<div id="results" class="card hidden"><h2>Session Complete</h2>
+<div class="stat">Current threshold: <span id="finalThreshold"></span></div>
+<div class="stat">Best threshold: <span id="bestThreshold"></span></div>
+<div class="stat">Sessions completed: <span id="sessionCount"></span></div>
+<button class="btn-primary" onclick="beginTraining()">Train Again</button>
+<button class="btn-secondary" onclick="showProgress()">View Progress</button></div>
+
+<div id="progress" class="card hidden"><h2>Your Progress</h2>
+<div id="progressList"></div>
+<canvas id="progressGraph" width="500" height="250"></canvas>
+<button class="btn-secondary" onclick="hideProgress()">Back</button>
+<button class="btn-danger" onclick="resetProfile()">Reset Profile</button></div>
+
+</div><script>
+const AudioContext=window.AudioContext||window.webkitAudioContext;const audioCtx=new AudioContext();let masterGain=audioCtx.createGain();masterGain.connect(audioCtx.destination);masterGain.gain.value=.5;document.getElementById("volume").oninput=function(){masterGain.gain.value=this.value/100;}
+
+let mode="calibration",baseFrequency=440,comparisonFrequency=440,currentDirection="higher",currentCents=40,minCents=2,maxCents=50,score=0,total=0,streak=0,reversals=[],lastMove=null,lastPlayed=false,sessionRounds=20;
+
+function playCorrectSound(){let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type="sine";o.frequency.value=880;g.gain.setValueAtTime(0,audioCtx.currentTime);g.gain.linearRampToValueAtTime(.4,audioCtx.currentTime+.02);g.gain.linearRampToValueAtTime(0,audioCtx.currentTime+.25);o.connect(g);g.connect(masterGain);o.start();o.stop(audioCtx.currentTime+.25);}
+function playIncorrectSound(){let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type="square";o.frequency.value=120;g.gain.setValueAtTime(0,audioCtx.currentTime);g.gain.linearRampToValueAtTime(.4,audioCtx.currentTime+.02);g.gain.linearRampToValueAtTime(0,audioCtx.currentTime+.35);o.connect(g);g.connect(masterGain);o.start();o.stop(audioCtx.currentTime+.35);}
+
+function startApp(){document.getElementById("welcome").classList.add("hidden");let p=JSON.parse(localStorage.getItem("pitchProfile"));if(p){beginTraining()}else{document.getElementById("calibrationInstructions").classList.remove("hidden")}}
+
+function startCalibration(){document.getElementById("calibrationInstructions").classList.add("hidden");document.getElementById("calibration").classList.remove("hidden");mode="calibration";currentCents=40;document.getElementById("rangeBarCal").style.width="100%";document.getElementById("calCentsDisplay").innerHTML=currentCents;}
+
+function centsToFrequency(f,c){return f*Math.pow(2,c/1200);}
+function randomPitch(){let p=[220,261.63,329.63,392,440,523.25,659.25,880];return p[Math.floor(Math.random()*p.length)]}
+
+function playTone(freq,time,dur,type="sine"){let o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type=type;o.frequency.value=freq;g.gain.setValueAtTime(0,time);g.gain.linearRampToValueAtTime(.8,time+.02);g.gain.linearRampToValueAtTime(0,time+dur-.02);o.connect(g);g.connect(masterGain);o.start(time);o.stop(time+dur);}
+
+function createTrial(){baseFrequency=randomPitch();currentDirection=Math.random()<.5?"higher":"lower";comparisonFrequency=centsToFrequency(baseFrequency,currentDirection==="higher"?currentCents:-currentCents);lastPlayed=false;document.getElementById("centsDisplay").innerHTML=currentCents;document.getElementById("calCentsDisplay").innerHTML=currentCents;}
+
+function playTrial(){if(audioCtx.state==="suspended")audioCtx.resume();createTrial();let now=audioCtx.currentTime+.1;let type=document.getElementById("timbreSelect").value||"sine";playTone(baseFrequency,now,.6,type);playTone(comparisonFrequency,now+1,.6,type);lastPlayed=true;}
+function replay(){if(!lastPlayed)return;let now=audioCtx.currentTime+.1;playTone(baseFrequency,now,.6);playTone(comparisonFrequency,now+1,.6);lastPlayed=true;}
+
+function respond(ans){
+if(!lastPlayed)return;total++;
+let correct=ans===currentDirection;
+let msg=(mode==="calibration")?document.getElementById("calibrationMessage"):document.getElementById("message");
+let card=document.querySelector(".card:not(.hidden)");
+
+if(correct){score++;streak++;msg.innerHTML="<span style='color:#4ade80;font-size:22px;font-weight:bold;'>Correct</span>";playCorrectSound();card.classList.add("flash-correct");setTimeout(()=>card.classList.remove("flash-correct"),600);}
+else{streak=0;msg.innerHTML="<span style='color:#f87171;font-size:22px;font-weight:bold;'>Incorrect</span>";playIncorrectSound();card.classList.add("flash-incorrect");setTimeout(()=>card.classList.remove("flash-incorrect"),600);}
+
+if(correct&&streak>=2){streak=0;if(lastMove==="up")reversals.push(currentCents);lastMove="down";currentCents=Math.max(minCents,currentCents-2);}
+if(!correct){if(lastMove==="down")reversals.push(currentCents);lastMove="up";currentCents=Math.min(maxCents,currentCents+2);}
+
+document.getElementById("scoreDisplay").innerHTML=score+" / "+total;
+if(mode==="calibration")document.getElementById("calCount").innerHTML=reversals.length;
+
+document.getElementById("roundDisplay").innerHTML=total;
+document.getElementById("progressBar").style.width=Math.min(100,(total/sessionRounds)*100)+"%";
+
+let pct=(currentCents/40)*100;
+if(mode==="calibration"){let rb=document.getElementById("rangeBarCal");rb.style.width=pct+"%";rb.classList.add("pulse");setTimeout(()=>rb.classList.remove("pulse"),250);}
+else{let rb=document.getElementById("rangeBarTrain");rb.style.width=pct+"%";rb.classList.add("pulse");setTimeout(()=>rb.classList.remove("pulse"),250);}
+
+lastPlayed=false;
+
+if(mode==="calibration"&&reversals.length>=8){finishCalibration();return;}
+if(mode==="training"&&total>=sessionRounds){endSession();return;}
+}
+
+function finishCalibration(){
+let recent=reversals.slice(-6);
+let threshold=recent.reduce((a,b)=>a+b,0)/recent.length;
+let profile={calibrated:true,baselineThreshold:threshold,bestThreshold:threshold,sessions:[]};
+localStorage.setItem("pitchProfile",JSON.stringify(profile));
+document.getElementById("calibration").classList.add("hidden");
+beginTraining();
+}
+
+function beginTraining(){
+mode="training";
+document.getElementById("calibration").classList.add("hidden");
+document.getElementById("results").classList.add("hidden");
+document.getElementById("training").classList.remove("hidden");
+
+let p=JSON.parse(localStorage.getItem("pitchProfile"));
+currentCents=p?Math.min(40,p.baselineThreshold*1.5):40;
+
+score=0;total=0;streak=0;reversals=[];
+document.getElementById("scoreDisplay").innerHTML="0 / 0";
+document.getElementById("message").innerHTML="";
+document.getElementById("roundDisplay").innerHTML=1;
+document.getElementById("roundTotal").innerHTML=sessionRounds;
+document.getElementById("progressBar").style.width="0%";
+document.getElementById("centsDisplay").innerHTML=currentCents;
+document.getElementById("rangeBarTrain").style.width="100%";
+
+updateTimbreMenu();
+}
+
+function saveSession(){
+let p=JSON.parse(localStorage.getItem("pitchProfile"));if(!p)return;
+if(reversals.length===0)return;
+let recent=reversals.slice(-6);
+let threshold=recent.reduce((a,b)=>a+b,0)/recent.length;
+if(threshold<p.bestThreshold)p.bestThreshold=threshold;
+let accuracy=total>0?Math.round(score/total*100):0;
+let improvement=((p.baselineThreshold-threshold)/p.baselineThreshold)*100;
+p.sessions.push({date:new Date().toLocaleDateString(),threshold,accuracy,improvement});
+p.improvement=improvement;
+localStorage.setItem("pitchProfile",JSON.stringify(p));
+showResults(p,threshold);
+}
+
+function showResults(p,t){
+document.getElementById("training").classList.add("hidden");
+document.getElementById("results").classList.remove("hidden");
+document.getElementById("finalThreshold").innerHTML=t.toFixed(1)+" cents";
+document.getElementById("bestThreshold").innerHTML=p.bestThreshold.toFixed(1)+" cents";
+document.getElementById("sessionCount").innerHTML=p.sessions.length;
+}
+
+function unlockedTimbres(){
+let p=JSON.parse(localStorage.getItem("pitchProfile"));
+if(!p)return["sine"];
+return p.improvement>=60?["sine","triangle","square"]:["sine"];
+}
+
+function updateTimbreMenu(){
+let t=unlockedTimbres(),m=document.getElementById("timbreSelect");m.innerHTML="";
+t.forEach(x=>{let o=document.createElement("option");o.value=x;o.textContent=x;m.appendChild(o);});
+}
+
+function endSession(){saveSession();}
+
+function showProgress(){
+document.getElementById("welcome").classList.add("hidden");
+document.getElementById("training").classList.add("hidden");
+document.getElementById("results").classList.add("hidden");
+document.getElementById("progress").classList.remove("hidden");
+
+let p=JSON.parse(localStorage.getItem("pitchProfile"));
+if(!p){document.getElementById("progressList").innerHTML="<div class='stat'>No profile yet.</div>";drawEmptyGraph();return;}
+
+let html="";
+p.sessions.forEach((s,i)=>{html+=`<div class="stat"><strong>Session ${i+1}</strong><br>Date: ${s.date}<br>Threshold: ${s.threshold.toFixed(1)} cents<br>Accuracy: ${s.accuracy}%<br>Improvement: ${s.improvement.toFixed(1)}%</div>`});
+document.getElementById("progressList").innerHTML=html;
+drawProgressGraph();
+}
+
+function hideProgress(){
+document.getElementById("progress").classList.add("hidden");
+document.getElementById("welcome").classList.remove("hidden");
+}
+
+function drawEmptyGraph(){
+let c=document.getElementById("progressGraph").getContext("2d");
+c.fillStyle="#444";c.fillRect(0,0,500,250);
+c.fillStyle="#ccc";c.font="16px Arial";c.fillText("No data yet",200,130);
+}
+
+function drawProgressGraph(){
+let p=JSON.parse(localStorage.getItem("pitchProfile"));
+if(!p||!p.sessions.length){drawEmptyGraph();return;}
+let c=document.getElementById("progressGraph").getContext("2d");
+c.clearRect(0,0,500,250);c.fillStyle="#111";c.fillRect(0,0,500,250);
+let th=p.sessions.map(s=>s.threshold),maxT=Math.max(...th),minT=Math.min(...th);
+let pad=30,w=500-pad*2,h=250-pad*2;
+c.strokeStyle="#555";c.beginPath();c.moveTo(pad,pad);c.lineTo(pad,pad+h);c.lineTo(pad+w,pad+h);c.stroke();
+c.strokeStyle="#4f46e5";c.beginPath();
+p.sessions.forEach((s,i)=>{let x=pad+(i/(p.sessions.length-1||1))*w;let yNorm=(s.threshold-minT)/(maxT-minT||1);let y=pad+h-yNorm*h;if(i===0)c.moveTo(x,y);else c.lineTo(x,y);});
+c.stroke();
+}
+
+function resetProfile(){localStorage.removeItem("pitchProfile");hideProgress();}
+</script></body></html>
